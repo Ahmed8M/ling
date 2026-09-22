@@ -48,19 +48,31 @@ def _():
     import html
     import json
     import re
+    import tempfile
+    import urllib.request
     from pathlib import Path
     import numpy as np
     import faiss
     import torch
     from sentence_transformers import CrossEncoder, SentenceTransformer
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    return AutoModelForCausalLM, AutoTokenizer, CrossEncoder, Path, SentenceTransformer, faiss, html, json, np, re, torch
+    return AutoModelForCausalLM, AutoTokenizer, CrossEncoder, Path, SentenceTransformer, faiss, html, json, np, re, tempfile, torch, urllib
 
 
 @app.cell
-def _(Path, torch):
+def _(Path, tempfile, torch, urllib):
     # ٢. إعدادات قليلة يمكنك تغييرها؛ لا يوجد مفتاح API.
     DATA_PATH = Path(__file__).resolve().parent / "data" / "labor_2026.md"
+    PROJECT_URL = "https://raw.githubusercontent.com/Ahmed8M/ling/HEAD/"
+    if not DATA_PATH.exists():
+        # قد تنسخ منصات مثل molab ملف الدفتر وحده؛ ننزّل ملفات المشروع من GitHub إلى مجلد مؤقت.
+        _root = Path(tempfile.gettempdir()) / "arabic-labor-rag"
+        for _name in ["data/labor_2026.md", "evaluation.json", "validation_results.json"]:
+            _target = _root / _name
+            if not _target.exists():
+                _target.parent.mkdir(parents=True, exist_ok=True)
+                urllib.request.urlretrieve(PROJECT_URL + _name, _target)
+        DATA_PATH = _root / "data" / "labor_2026.md"
     EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
     ANSWER_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
     RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
