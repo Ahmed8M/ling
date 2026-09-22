@@ -45,6 +45,11 @@ def _(mo):
 @app.cell
 def _():
     # ١. المكتبات: معالجة النص، الاسترجاع، وتوليد الإجابة.
+    import os
+    # نستخدم PyTorch فقط. بعض البيئات (مثل molab) تثبّت TensorFlow وKeras 3 مسبقًا،
+    # فيحاول transformers تحميل دعم TensorFlow ويتوقف؛ نعطّله قبل الاستيراد.
+    os.environ.setdefault("USE_TF", "0")
+    os.environ.setdefault("USE_TORCH", "1")
     import html
     import json
     import re
