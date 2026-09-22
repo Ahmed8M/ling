@@ -49,7 +49,7 @@ report = {
     'cases': cases,  # نسخة من الأسئلة وشرائحها تحفظ مع التشغيل نفسه.
     'tested_at': datetime.now(timezone.utc).isoformat(),
     'data_sha256': hashlib.sha256((ROOT / 'data/labor_2026.md').read_bytes()).hexdigest(),
-    'settings': {key: definitions[key] for key in ['EMBEDDING_MODEL', 'RERANKER_MODEL', 'ANSWER_MODEL', 'CANDIDATE_K', 'TOP_K', 'DEVICE']},
+    'settings': {key: definitions[key] for key in ['EMBEDDING_MODEL', 'RERANKER_MODEL', 'ANSWER_MODEL', 'RERANK_POOL', 'CANDIDATE_K', 'TOP_K', 'DEVICE']},
     'counts': {'pages': len(definitions['pages']), 'blocks': len(definitions['blocks']), 'chunks': len(definitions['chunks'])},
     'summary': definitions['summary_rows'],
     'retrieval': definitions['retrieval_rows'],
@@ -69,7 +69,7 @@ for case in cases:
     if not case['relevant_sources']:
         continue
     before = time.perf_counter()
-    candidates = definitions['retrieve'](case['question'], definitions['CANDIDATE_K'])
+    candidates = definitions['retrieve'](case['question'], definitions['RERANK_POOL'])
     ranked = definitions['rerank'](case['question'], candidates)
     hits = ranked[:definitions['TOP_K']]
     answer = definitions['answer'] if case['id'] == ui_case['id'] else definitions['generate_answer'](case['question'], hits)

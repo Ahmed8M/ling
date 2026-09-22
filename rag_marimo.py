@@ -66,10 +66,11 @@ def _(Path, torch):
     RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     TOP_K = 1
-    CANDIDATE_K = 5  # نسترجع خمسة مصادر مختلفة ثم نعيد ترتيبها.
+    RERANK_POOL = 20  # يسترجع E5 عشرين مصدرًا مختلفًا ويعيد Cross-Encoder ترتيبها.
+    CANDIDATE_K = 5  # نحتفظ بأفضل خمسة بعد إعادة الترتيب، ونقيس المقاييس عليها.
     MAX_NEW_TOKENS = 256
     torch.set_num_threads(min(4, torch.get_num_threads()))
-    return ANSWER_MODEL, CANDIDATE_K, DATA_PATH, DEVICE, EMBEDDING_MODEL, MAX_NEW_TOKENS, RERANKER_MODEL, TOP_K
+    return ANSWER_MODEL, CANDIDATE_K, DATA_PATH, DEVICE, EMBEDDING_MODEL, MAX_NEW_TOKENS, RERANKER_MODEL, RERANK_POOL, TOP_K
 
 
 @app.cell
@@ -261,13 +262,13 @@ def _(mo, model):
 
 
 @app.cell
-def _(CANDIDATE_K, TOP_K, mo, question_form, rerank, retrieve):
+def _(CANDIDATE_K, RERANK_POOL, TOP_K, mo, question_form, rerank, retrieve):
     # ١٤. نسترجع خمسة مصادر ونمرر أفضل مصدر بعد إعادة الترتيب إلى Qwen.
     mo.stop(question_form.value is None)
     question = question_form.value.strip()
     mo.stop(not question, mo.md("اكتب سؤالًا أولًا."))
-    candidates = retrieve(question, CANDIDATE_K)
-    ranked_hits = rerank(question, candidates)
+    candidates = retrieve(question, RERANK_POOL)
+    ranked_hits = rerank(question, candidates)[:CANDIDATE_K]
     hits = ranked_hits[:TOP_K]
     return candidates, hits, question, ranked_hits
 
@@ -345,7 +346,7 @@ def _(candidates, mo, ranked_hits):
         mo.md("### قبل إعادة الترتيب وبعدها\nالدرجتان لهما مقياسان مختلفان؛ لا تمثلان احتمال صحة الإجابة. إعادة الترتيب لا تجد مصدرًا غائبًا عن المرشحين."),
         mo.ui.table(_rows, selection=None, pagination=False, show_column_summaries=False),
         mo.accordion({
-            f"المرشح {i} قبل الترتيب — صفحة {hit['page']}": mo.plain_text(hit["text"])
+            f"مرشح E5 رقم {i} قبل الترتيب — صفحة {hit['page']}": mo.plain_text(hit["text"])
             for i, hit in enumerate(candidates, 1)
         }),
     ]).style({"direction": "rtl", "text-align": "right"})
@@ -358,6 +359,7 @@ def _(mo):
     ## اختبارات Lab 5 — أسئلة عربية فقط
     **Hit@1:** هل كان أول مصدر صحيحًا؟ **Recall@5:** كم مصدرًا مرجعيًا وجدناه بين أول خمسة؟
     **MRR@5:** متوسط مقلوب ترتيب أول مصدر صحيح؛ الغياب يعطي صفرًا.
+    **قبل:** أول خمسة من E5. **بعد:** أول خمسة بعد أن يعيد Cross-Encoder ترتيب عشرين مرشحًا من E5.
 
     هذه عينة تعليمية صغيرة بتوسيم يدوي للنصوص وصفوف الجداول. مقاييس البحث لا تقيس صحة الإجابة.
     الإجابات المرجعية للمراجعة فقط، ولا تدخل في Prompt. اختبارات خارج النطاق تقيس الامتناع منفصلةً.
@@ -411,21 +413,22 @@ def _():
 
 
 @app.cell
-def _(CANDIDATE_K, relevant_ids, rerank, retrieval_metrics, retrieve):
-    # ٢٤. نقارن مرحلتي البحث على مجموعة المرشحين نفسها، دون توليد إجابات.
+def _(CANDIDATE_K, RERANK_POOL, relevant_ids, rerank, retrieval_metrics, retrieve):
+    # ٢٤. نقارن أول خمسة من E5 بأول خمسة بعد إعادة ترتيب المرشحين العشرين، دون توليد إجابات.
     def evaluate_retrieval(cases):
         rows = []
         for case in cases:
             if not case["relevant_sources"]:
                 continue
             relevant = relevant_ids(case)
-            before = retrieve(case["question"], CANDIDATE_K)
-            after = rerank(case["question"], before)
-            for stage, sources in [("قبل", before), ("بعد", after)]:
+            pool = retrieve(case["question"], RERANK_POOL)
+            after = rerank(case["question"], pool)[:CANDIDATE_K]
+            for stage, sources in [("قبل", pool[:CANDIDATE_K]), ("بعد", after)]:
                 ids = [hit["block"] for hit in sources]
                 metrics = retrieval_metrics(ids, relevant, CANDIDATE_K)
                 rows.append({"السؤال": case["id"], "المرحلة": stage, **metrics,
-                             "المصادر بالترتيب": ids, "المراجع": sorted(relevant)})
+                             "المصادر بالترتيب": ids, "المراجع": sorted(relevant),
+                             "المرشحون": [hit["block"] for hit in pool]})
         return rows
     return (evaluate_retrieval,)
 
@@ -444,15 +447,15 @@ def _(CANDIDATE_K, evaluate_button, evaluate_retrieval, load_evaluation_cases, m
                                 for key, label in [("Hit@1", "Hit@1"), ("Recall", f"Recall@{CANDIDATE_K}"), ("RR", f"MRR@{CANDIDATE_K}")]}})
     mo.vstack([mo.ui.table(summary_rows, selection=None, pagination=False),
                mo.accordion({"تفاصيل التقييم": mo.ui.table(retrieval_rows, selection=None)}),
-               mo.md("Recall عند عدد المرشحين الكامل يبقى نفسه بعد تبديل ترتيبهم؛ قد يتغير Hit@1 وMRR. التوسيم محدود بالمراجع التي راجعناها يدويًا.")]).style({"direction": "rtl", "text-align": "right"})
+               mo.md(f"إعادة الترتيب تختار أفضل {CANDIDATE_K} من {RERANK_POOL} مرشحًا، لذلك قد يتغير Recall@{CANDIDATE_K} أيضًا. لا تجد مصدرًا غائبًا عن المرشحين العشرين. التوسيم محدود بالمراجع التي راجعناها يدويًا.")]).style({"direction": "rtl", "text-align": "right"})
     return retrieval_rows, summary_rows
 
 
 @app.cell
-def _(CANDIDATE_K, TOP_K, generate_answer, rerank, retrieve):
+def _(RERANK_POOL, TOP_K, generate_answer, rerank, retrieve):
     # ٢٦. نجرب سؤالًا غير قابل للإجابة؛ لا نفرض عتبة تشابه عشوائية.
     def check_outside(case):
-        sources = rerank(case["question"], retrieve(case["question"], CANDIDATE_K))[:TOP_K]
+        sources = rerank(case["question"], retrieve(case["question"], RERANK_POOL))[:TOP_K]
         response = generate_answer(case["question"], sources)
         return {"السؤال": case["question"], "الإجابة الفعلية": response,
                 "ظهر نص الامتناع": "لا أجد إجابة كافية" in response,
@@ -564,7 +567,8 @@ def _():
         for row, review in zip(rows, reviews):
             if row["inside"]:
                 relevant = set(row["before"]["المراجع"])
-                if not relevant.intersection(row["before"]["المصادر بالترتيب"]):
+                # السجلات الأقدم لا تحفظ المرشحين العشرين، فنرجع إلى أول خمسة.
+                if not relevant.intersection(row["before"].get("المرشحون", row["before"]["المصادر بالترتيب"])):
                     details.append({"السؤال": row["id"], "النوع": "غياب المصدر عن المرشحين", "أساس الحكم": "آلي — المراجع الموسومة"})
                 elif not relevant.intersection(row["selected"]):
                     details.append({"السؤال": row["id"], "النوع": "المصدر لم يُختر للإجابة", "أساس الحكم": "آلي — المصادر المرسلة للنموذج"})
