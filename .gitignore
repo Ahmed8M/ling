@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+__marimo__/
+.env
+.env.*
+.cache/
+*.safetensors
+*.bin
+*.pt
+*.npy

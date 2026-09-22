@@ -1,0 +1,7 @@
+marimo==0.24.2
+numpy==2.3.5
+torch==2.8.0
+transformers==4.51.3
+sentence-transformers==3.4.1
+sentencepiece==0.2.2
+faiss-cpu==1.15.1
