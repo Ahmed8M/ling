@@ -26,12 +26,14 @@ for case in cases:
         assert startup['relevant_ids'](case)
 
 start = time.perf_counter()
+ui_case = cases[3]  # سؤال الواجهة؛ نعيد استخدام إجابته بدل توليدها مرتين.
 outputs, definitions = app.run(defs={
     'prepare': SimpleNamespace(value=True),
-    'question_form': SimpleNamespace(value=cases[3]['question']),
+    'question_form': SimpleNamespace(value=ui_case['question']),
     'evaluate_button': SimpleNamespace(value=True),
     'outside_button': SimpleNamespace(value=True),
 })
+assert 'model' in definitions, 'تعذر تحميل النماذج؛ تحقق من الاتصال بـ huggingface.co أو من التخزين المؤقت.'
 
 # FAISS Inner Product يجب أن يطابق Cosine السابق عند تطبيع المتجهات.
 import numpy as np
@@ -70,12 +72,12 @@ for case in cases:
     candidates = definitions['retrieve'](case['question'], definitions['CANDIDATE_K'])
     ranked = definitions['rerank'](case['question'], candidates)
     hits = ranked[:definitions['TOP_K']]
-    answer = definitions['answer'] if case['id'] == 4 else definitions['generate_answer'](case['question'], hits)
+    answer = definitions['answer'] if case['id'] == ui_case['id'] else definitions['generate_answer'](case['question'], hits)
     row = {'id': case['id'], 'question': case['question'], 'answer': answer,
            'sources': [{'block': hit['block'], 'page': hit['page'], 'text': hit['text'], 'score': hit['score'], 'rerank_score': hit['rerank_score']} for hit in hits],
            'reference_answer': case['reference_answer'],
-           'elapsed_seconds': None if case['id'] == 4 else round(time.perf_counter() - before, 2),
-           'reused_answer_from_initial_notebook_run': case['id'] == 4}
+           'elapsed_seconds': None if case['id'] == ui_case['id'] else round(time.perf_counter() - before, 2),
+           'reused_answer_from_initial_notebook_run': case['id'] == ui_case['id']}
     report['answers'].append(row)
     save()
     print('ANSWER', json.dumps(row, ensure_ascii=False), flush=True)

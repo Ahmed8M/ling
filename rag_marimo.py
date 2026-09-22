@@ -73,6 +73,19 @@ def _(Path, torch):
 
 
 @app.cell
+def _(mo):
+    # رسالة واضحة إذا تعذر تنزيل نموذج أو قراءته، بدل تتبع أخطاء Python الطويل.
+    def model_error(name, error):
+        return mo.md(
+            f"**تعذر تحميل النموذج `{name}`.**\n\n"
+            "تحقق من الاتصال بموقع huggingface.co في أول تشغيل، أو من وجود النموذج في التخزين المؤقت "
+            "عند العمل دون اتصال (`HF_HUB_OFFLINE=1`)، ثم اضغط زر التجهيز مجددًا.\n\n"
+            f"التفاصيل: `{type(error).__name__}`"
+        ).style({"direction": "rtl", "text-align": "right"})
+    return (model_error,)
+
+
+@app.cell
 def _(DATA_PATH, html, mo, re):
     # ٣. نقرأ النسخة الأصلية ونحتفظ برقم كل صفحة.
     raw_text = DATA_PATH.read_text(encoding="utf-8")
@@ -85,7 +98,7 @@ def _(DATA_PATH, html, mo, re):
         _text = re.sub(r"</?p>", "", _text)
         _text = re.sub(r"[ \t]+", " ", _text).strip()
         pages.append({"page": int(_number), "text": _text})
-    mo.md(f"**البيانات:** {len(pages)} صفحة من ملف قطاع العمل.")
+    mo.md(f"**البيانات:** {len(pages)} صفحة من ملف قطاع العمل.").style({"direction": "rtl", "text-align": "right"})
     return (pages,)
 
 
@@ -119,12 +132,15 @@ def _(mo):
 
 
 @app.cell
-def _(DEVICE, EMBEDDING_MODEL, SentenceTransformer, mo, prepare):
+def _(DEVICE, EMBEDDING_MODEL, SentenceTransformer, mo, model_error, prepare):
     # ٥. نموذج الاسترجاع يحوّل النص إلى متجه أعداد.
-    mo.stop(not prepare.value, mo.md("اضغط زر التجهيز للبدء."))
-    with mo.status.spinner(title="تحميل نموذج الاسترجاع…"):
-        encoder = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
-    mo.md("**نموذج الاسترجاع جاهز.**")
+    mo.stop(not prepare.value, mo.md("اضغط زر التجهيز للبدء.").style({"direction": "rtl", "text-align": "right"}))
+    try:
+        with mo.status.spinner(title="تحميل نموذج الاسترجاع…"):
+            encoder = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
+    except OSError as error:
+        mo.stop(True, model_error(EMBEDDING_MODEL, error))
+    mo.md("**نموذج الاسترجاع جاهز.**").style({"direction": "rtl", "text-align": "right"})
     return (encoder,)
 
 
@@ -143,7 +159,7 @@ def _(blocks, encoder, mo):
                 chunks.append({"page": _block["page"], "text": _title + "\n" + _part, "block": _block_id})
             if _start + 320 >= len(_ids):
                 break
-    mo.md(f"**التقسيم:** {len(chunks)} مقطعًا، مع الاحتفاظ بصفحة كل مقطع.")
+    mo.md(f"**التقسيم:** {len(chunks)} مقطعًا، مع الاحتفاظ بصفحة كل مقطع.").style({"direction": "rtl", "text-align": "right"})
     return (chunks,)
 
 
@@ -155,7 +171,7 @@ def _(chunks, encoder, mo):
             ["passage: " + item["text"] for item in chunks],
             normalize_embeddings=True, batch_size=16, show_progress_bar=True,
         )
-    mo.md(f"**الفهرس جاهز:** {embeddings.shape[0]} مقطعًا × {embeddings.shape[1]} بُعدًا.")
+    mo.md(f"**الفهرس جاهز:** {embeddings.shape[0]} مقطعًا × {embeddings.shape[1]} بُعدًا.").style({"direction": "rtl", "text-align": "right"})
     return (embeddings,)
 
 
@@ -188,11 +204,14 @@ def _(blocks, chunks, encoder, index, np):
 
 
 @app.cell
-def _(CrossEncoder, DEVICE, RERANKER_MODEL, index, mo):
+def _(CrossEncoder, DEVICE, RERANKER_MODEL, index, mo, model_error):
     # ١٠. Cross-Encoder يقرأ السؤال والمقطع معًا لتقدير صلتهما.
     mo.stop(index is None)
-    with mo.status.spinner(title="تحميل نموذج إعادة الترتيب…"):
-        reranker = CrossEncoder(RERANKER_MODEL, device=DEVICE, max_length=512)
+    try:
+        with mo.status.spinner(title="تحميل نموذج إعادة الترتيب…"):
+            reranker = CrossEncoder(RERANKER_MODEL, device=DEVICE, max_length=512)
+    except OSError as error:
+        mo.stop(True, model_error(RERANKER_MODEL, error))
     return (reranker,)
 
 
@@ -210,16 +229,19 @@ def _(reranker):
 
 
 @app.cell
-def _(ANSWER_MODEL, AutoModelForCausalLM, AutoTokenizer, DEVICE, mo, reranker, torch):
+def _(ANSWER_MODEL, AutoModelForCausalLM, AutoTokenizer, DEVICE, mo, model_error, reranker, torch):
     # ١٢. تحميل نموذج الإجابة داخل بيئة Python، بعد تجهيز البحث.
     mo.stop(reranker is None)
-    with mo.status.spinner(title="تحميل نموذج الإجابة؛ التنزيل الأول قد يستغرق عدة دقائق…"):
-        tokenizer = AutoTokenizer.from_pretrained(ANSWER_MODEL)
-        model = AutoModelForCausalLM.from_pretrained(
-            ANSWER_MODEL,
-            torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
-        ).to(DEVICE).eval()
-    mo.md(f"**جاهز للأسئلة.** النموذج: `{ANSWER_MODEL}` — الجهاز: `{DEVICE}`.")
+    try:
+        with mo.status.spinner(title="تحميل نموذج الإجابة؛ التنزيل الأول قد يستغرق عدة دقائق…"):
+            tokenizer = AutoTokenizer.from_pretrained(ANSWER_MODEL)
+            model = AutoModelForCausalLM.from_pretrained(
+                ANSWER_MODEL,
+                torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
+            ).to(DEVICE).eval()
+    except OSError as error:
+        mo.stop(True, model_error(ANSWER_MODEL, error))
+    mo.md(f"**جاهز للأسئلة.** النموذج: `{ANSWER_MODEL}` — الجهاز: `{DEVICE}`.").style({"direction": "rtl", "text-align": "right"})
     return model, tokenizer
 
 
@@ -421,7 +443,7 @@ def _(CANDIDATE_K, evaluate_button, evaluate_retrieval, evaluation_cases, mo, np
                                 for key, label in [("Hit@1", "Hit@1"), ("Recall", f"Recall@{CANDIDATE_K}"), ("RR", f"MRR@{CANDIDATE_K}")]}})
     mo.vstack([mo.ui.table(summary_rows, selection=None, pagination=False),
                mo.accordion({"تفاصيل التقييم": mo.ui.table(retrieval_rows, selection=None)}),
-               mo.md("Recall عند عدد المرشحين الكامل يبقى نفسه بعد تبديل ترتيبهم؛ قد يتغير Hit@1 وMRR. التوسيم محدود بالمراجع التي راجعناها يدويًا.")])
+               mo.md("Recall عند عدد المرشحين الكامل يبقى نفسه بعد تبديل ترتيبهم؛ قد يتغير Hit@1 وMRR. التوسيم محدود بالمراجع التي راجعناها يدويًا.")]).style({"direction": "rtl", "text-align": "right"})
     return retrieval_rows, summary_rows
 
 
@@ -444,7 +466,7 @@ def _(check_outside, evaluation_cases, mo, outside_button):
     with mo.status.spinner(title="توليد إجابات أسئلة خارج البيانات…"):
         outside_rows = [check_outside(case) for case in evaluation_cases if not case["relevant_sources"]]
     mo.vstack([mo.ui.table(outside_rows, selection=None, pagination=False),
-               mo.md("وجود نتيجة بحث لا يعني وجود جواب. ظهور عبارة الامتناع فحص نصي فقط، وليس إثباتًا لخلو الإجابة من معلومات غير مدعومة.")])
+               mo.md("وجود نتيجة بحث لا يعني وجود جواب. ظهور عبارة الامتناع فحص نصي فقط، وليس إثباتًا لخلو الإجابة من معلومات غير مدعومة.")]).style({"direction": "rtl", "text-align": "right"})
     return (outside_rows,)
 
 
@@ -474,7 +496,7 @@ def _(DATA_PATH, json, mo, report_button):
     mo.stop(saved_report.get("schema_version") != 2, mo.md("أعد تشغيل `python validate_project.py` لتحديث صيغة التقرير."))
     saved_cases = saved_report["cases"]  # شرائح الأسئلة وقت إجراء هذا الاختبار.
     _date = saved_report["tested_at"]
-    mo.md(f"**تاريخ التشغيل المحفوظ (UTC):** `{_date}` — التقرير لا يتغير بمجرد كتابة سؤال جديد.")
+    mo.md(f"**تاريخ التشغيل المحفوظ (UTC):** `{_date}` — التقرير لا يتغير بمجرد كتابة سؤال جديد.").style({"direction": "rtl", "text-align": "right"})
     return saved_cases, saved_report
 
 
@@ -528,7 +550,7 @@ def _(mo, saved_rows):
                        value="لم يُراجع", label=f"{row['id']}. {row['question']}", full_width=True)
         for row in saved_rows
     ]).form(submit_button_label="تطبيق مراجعتي على التقرير")
-    mo.vstack([mo.md("### مراجعتك للإجابات\nاحكم على كفاية الإجابة وصحتها، وافتح المصدر عند الشك. المراجعة تحفظ داخل التقرير الذي تنزّله."), review_form])
+    mo.vstack([mo.md("### مراجعتك للإجابات\nاحكم على كفاية الإجابة وصحتها، وافتح المصدر عند الشك. المراجعة تحفظ داخل التقرير الذي تنزّله."), review_form]).style({"direction": "rtl", "text-align": "right"})
     return (review_form,)
 
 
@@ -563,7 +585,7 @@ def _(classify_errors, mo, review_form, saved_rows):
         _ids = sorted({item["السؤال"] for item in error_details if (item["النوع"], item["أساس الحكم"]) == (_kind, _origin)})
         error_counts.append({"نوع الخطأ": _kind, "أساس الحكم": _origin, "عدد الأسئلة": len(_ids), "أمثلة — أرقام الأسئلة": _ids})
     mo.vstack([mo.md("### تصنيف الأخطاء\nالتصنيفات متداخلة؛ مجموع الأعداد قد يتجاوز عدد الأسئلة المخفقة. أحكام المساعد أولية حتى تراجعها."),
-               mo.ui.table(error_counts, selection=None, pagination=False) if error_counts else mo.md("لا توجد أخطاء مصنفة؛ افحص تغطية المراجعة قبل استنتاج النجاح.")])
+               mo.ui.table(error_counts, selection=None, pagination=False) if error_counts else mo.md("لا توجد أخطاء مصنفة؛ افحص تغطية المراجعة قبل استنتاج النجاح.")]).style({"direction": "rtl", "text-align": "right"})
     return error_counts, error_details, user_reviews
 
 
@@ -594,7 +616,7 @@ def _(mo, saved_report, saved_rows, sliced_evaluation, user_reviews):
     # ٣٥. الشرائح تخص موضع الإجابة المرجعية، لا نوع المصدر الذي اختاره النظام بالخطأ.
     slice_rows = sliced_evaluation(saved_rows, user_reviews, saved_report["settings"]["CANDIDATE_K"])
     mo.vstack([mo.md("### التقييم حسب الشرائح\nأسئلة خارج النطاق تُقيّم منفصلة. الشرائح صغيرة ومتداخلة بين المحاور؛ لا تجمع أعداد المحورين."),
-               mo.ui.table(slice_rows, selection=None, pagination=False, show_column_summaries=False)])
+               mo.ui.table(slice_rows, selection=None, pagination=False, show_column_summaries=False)]).style({"direction": "rtl", "text-align": "right"})
     return (slice_rows,)
 
 
