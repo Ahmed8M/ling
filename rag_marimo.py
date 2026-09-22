@@ -206,7 +206,7 @@ def _(blocks, chunks, encoder, index, np):
 @app.cell
 def _(CrossEncoder, DEVICE, RERANKER_MODEL, index, mo, model_error):
     # ١٠. Cross-Encoder يقرأ السؤال والمقطع معًا لتقدير صلتهما.
-    mo.stop(index is None)
+    mo.stop(index is None)  # لا يتحقق أبدًا؛ الاعتماد على index يؤخر هذه الخلية حتى يكتمل الفهرس.
     try:
         with mo.status.spinner(title="تحميل نموذج إعادة الترتيب…"):
             reranker = CrossEncoder(RERANKER_MODEL, device=DEVICE, max_length=512)
@@ -231,7 +231,7 @@ def _(reranker):
 @app.cell
 def _(ANSWER_MODEL, AutoModelForCausalLM, AutoTokenizer, DEVICE, mo, model_error, reranker, torch):
     # ١٢. تحميل نموذج الإجابة داخل بيئة Python، بعد تجهيز البحث.
-    mo.stop(reranker is None)
+    mo.stop(reranker is None)  # كذلك: نحمّل نموذج الإجابة بعد نموذج إعادة الترتيب.
     try:
         with mo.status.spinner(title="تحميل نموذج الإجابة؛ التنزيل الأول قد يستغرق عدة دقائق…"):
             tokenizer = AutoTokenizer.from_pretrained(ANSWER_MODEL)
@@ -315,7 +315,8 @@ def _(generate_answer, hits, mo, question):
     # ١٧. نولّد الإجابة بعد إرسال السؤال.
     with mo.status.spinner(title="صياغة الإجابة… قد تكون بطيئة على CPU."):
         answer = generate_answer(question, hits)
-    mo.md("## الإجابة\n\n" + answer).style({"direction": "rtl", "text-align": "right"})
+    # نص النموذج يُعرض كما هو؛ لا نفسّره Markdown أو HTML.
+    mo.vstack([mo.md("## الإجابة"), mo.plain_text(answer)]).style({"direction": "rtl", "text-align": "right"})
     return (answer,)
 
 
@@ -374,11 +375,11 @@ def _(mo):
 
 
 @app.cell
-def _(DATA_PATH, evaluate_button, json, mo, outside_button):
-    # ٢١. لا نقرأ ملف التقييم إلا عند طلب الاختبارات.
-    mo.stop(not (evaluate_button.value or outside_button.value))
-    evaluation_cases = json.loads((DATA_PATH.parent.parent / "evaluation.json").read_text(encoding="utf-8"))
-    return (evaluation_cases,)
+def _(DATA_PATH, json):
+    # ٢١. لا نقرأ ملف التقييم إلا عند طلب الاختبارات؛ لكل زر خليته فلا يمسح أحدهما نتائج الآخر.
+    def load_evaluation_cases():
+        return json.loads((DATA_PATH.parent.parent / "evaluation.json").read_text(encoding="utf-8"))
+    return (load_evaluation_cases,)
 
 
 @app.cell
@@ -430,11 +431,11 @@ def _(CANDIDATE_K, relevant_ids, rerank, retrieval_metrics, retrieve):
 
 
 @app.cell
-def _(CANDIDATE_K, evaluate_button, evaluate_retrieval, evaluation_cases, mo, np):
+def _(CANDIDATE_K, evaluate_button, evaluate_retrieval, load_evaluation_cases, mo, np):
     # ٢٥. نعرض المتوسطات والتفاصيل؛ النتائج تُحسب عند الضغط على الزر.
     mo.stop(not evaluate_button.value)
     with mo.status.spinner(title="اختبار الاسترجاع وإعادة الترتيب…"):
-        retrieval_rows = evaluate_retrieval(evaluation_cases)
+        retrieval_rows = evaluate_retrieval(load_evaluation_cases())
     summary_rows = []
     for _stage in ["قبل", "بعد"]:
         _rows = [row for row in retrieval_rows if row["المرحلة"] == _stage]
@@ -460,11 +461,11 @@ def _(CANDIDATE_K, TOP_K, generate_answer, rerank, retrieve):
 
 
 @app.cell
-def _(check_outside, evaluation_cases, mo, outside_button):
+def _(check_outside, load_evaluation_cases, mo, outside_button):
     # ٢٧. هذا فحص لعبارة الامتناع؛ اقرأ الإجابة للتحقق من معناها كاملًا.
     mo.stop(not outside_button.value)
     with mo.status.spinner(title="توليد إجابات أسئلة خارج البيانات…"):
-        outside_rows = [check_outside(case) for case in evaluation_cases if not case["relevant_sources"]]
+        outside_rows = [check_outside(case) for case in load_evaluation_cases() if not case["relevant_sources"]]
     mo.vstack([mo.ui.table(outside_rows, selection=None, pagination=False),
                mo.md("وجود نتيجة بحث لا يعني وجود جواب. ظهور عبارة الامتناع فحص نصي فقط، وليس إثباتًا لخلو الإجابة من معلومات غير مدعومة.")]).style({"direction": "rtl", "text-align": "right"})
     return (outside_rows,)

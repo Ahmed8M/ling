@@ -14,7 +14,7 @@ cases = json.loads((ROOT / 'evaluation.json').read_text(encoding='utf-8'))
 # أول فتح يجب ألا ينزّل النماذج أو يقرأ الإجابات المرجعية.
 _, startup = app.run()
 assert len(startup['pages']) == 152
-assert 'model' not in startup and 'evaluation_cases' not in startup
+assert 'model' not in startup and 'retrieval_rows' not in startup and 'outside_rows' not in startup
 
 # تحقق من المقاييس في حالات الغياب، وخارج k، وأكثر من مصدر صحيح.
 metric = startup['retrieval_metrics']
