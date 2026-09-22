@@ -16,14 +16,15 @@ assert all(row['إجابات صحيحة / مراجعة المستخدم'] == 'ل
 
 # مقارنة متوقعة مستقلة مستمدة من سجلات ترتيب المصادر التي روجعت سابقًا.
 slices = {row['الفئة']: row for row in definitions['slice_rows']}
-assert (slices['جدول']['المصدر الأول قبل'], slices['جدول']['المصدر الأول بعد']) == ('1/3', '1/3')
+assert (slices['جدول']['المصدر الأول قبل'], slices['جدول']['المصدر الأول بعد']) == ('1/3', '2/3')
 assert (slices['نص سردي']['المصدر الأول قبل'], slices['نص سردي']['المصدر الأول بعد']) == ('4/5', '5/5')
 assert (slices['مباشر']['المصدر الأول قبل'], slices['مباشر']['المصدر الأول بعد']) == ('4/6', '5/6')
-assert slices['صياغة بديلة']['المصدر الأول بعد'] == '1/2'
-assert [row['Hit@1'] for row in definitions['final_metrics']] == [.625, .75]
+assert slices['صياغة بديلة']['المصدر الأول بعد'] == '2/2'
+assert [row['Hit@1'] for row in definitions['final_metrics']] == [.625, .875]
 errors = {(row['السؤال'], row['النوع'], row['أساس الحكم']) for row in definitions['error_details']}
 assert (5, 'المصدر لم يُختر للإجابة', 'آلي — المصادر المرسلة للنموذج') in errors
-assert (8, 'غياب المصدر عن المرشحين', 'آلي — المراجع الموسومة') in errors
+assert (8, 'امتناع رغم كفاية المصدر', 'تقييم أولي للمساعد') in errors
+assert not any(kind == 'غياب المصدر عن المرشحين' for _, kind, _ in errors)
 assert (3, 'إضافة غير مدعومة', 'تقييم أولي للمساعد') in errors
 
 # تشغيل جديد بلا مراجعات أولية يجب ألا يرث أحكام الإجابات القديمة.
@@ -31,7 +32,7 @@ fresh_rows = copy.deepcopy(rows)
 for row in fresh_rows:
     row['preliminary'] = {}
 fresh_errors = definitions['classify_errors'](fresh_rows, ['لم يُراجع'] * len(rows))
-assert len(fresh_errors) == 2 and all(item['أساس الحكم'].startswith('آلي') for item in fresh_errors)
+assert len(fresh_errors) == 1 and all(item['أساس الحكم'].startswith('آلي') for item in fresh_errors)
 
 # مدخلات اختبار للواجهة فقط، وليست مراجعات بشرية فعلية أو نتائج تُنشر.
 feedback = ['لم يُراجع'] * len(rows)
