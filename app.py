@@ -206,6 +206,11 @@ def _(CLAUDE_MODEL, SYSTEM_PROMPT, anthropic, user_message):
     def answer_with_claude(question, sources, key):
         if not key:
             return None, "أدخل مفتاح Anthropic API أو اختر النموذج المحلي."
+        if key.startswith("apikey_"):
+            # هذا معرّف المفتاح الظاهر في قائمة Console، لا المفتاح السري نفسه.
+            return None, ("هذا معرّف المفتاح (يبدأ بـ apikey_)، وليس المفتاح السري. المفتاح السري يبدأ بـ "
+                          "sk-ant- ويظهر مرة واحدة فقط عند إنشائه. إن لم تحتفظ به، أنشئ مفتاحًا جديدًا من "
+                          "Console ← API keys وانسخه فورًا.")
         client = anthropic.Anthropic(api_key=key)
         try:
             response = client.beta.messages.create(
