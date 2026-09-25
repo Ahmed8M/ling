@@ -171,27 +171,6 @@ def _(CANDIDATE_K, RERANK_POOL, TOP_K, blocks, chunks, encoder, index, np, reran
 
 
 @app.cell(hide_code=True)
-def _(mo, os):
-    # اختيار من يكتب الإجابة. Claude يحتاج مفتاح API يخص المستخدم.
-    engine = mo.ui.radio(
-        options={"نموذج محلي مجاني (أبطأ)": "local", "Claude (يتطلب مفتاح Anthropic API)": "claude"},
-        value="نموذج محلي مجاني (أبطأ)", label="من يكتب الإجابة؟")
-    api_key = mo.ui.text(
-        kind="password", label="مفتاح Anthropic API (يبقى في هذه الجلسة فقط)",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""), full_width=True)
-    return api_key, engine
-
-
-@app.cell(hide_code=True)
-def _(RTL, api_key, engine, mo):
-    _note = mo.md(
-        "يُرسل السؤال والمصادر المختارة إلى Anthropic لكتابة الإجابة. تكلفة الاستخدام على حساب صاحب المفتاح."
-    ) if engine.value == "claude" else mo.md("يعمل داخل التطبيق دون مفتاح؛ قد تستغرق الإجابة نصف دقيقة أو أكثر على CPU.")
-    mo.vstack([engine, api_key if engine.value == "claude" else mo.md(""), _note]).style(RTL)
-    return
-
-
-@app.cell(hide_code=True)
 def _(AutoModelForCausalLM, AutoTokenizer, DEVICE, LOCAL_ANSWER_MODEL, functools, torch):
     @functools.cache
     def load_local_model():
@@ -252,14 +231,36 @@ def _(CLAUDE_MODEL, SYSTEM_PROMPT, anthropic, user_message):
 
 
 @app.cell(hide_code=True)
-def _(RTL, mo):
-    question_form = mo.ui.text_area(
-        placeholder="مثال: ما شروط نقل خدمات العمالة المنزلية من فرد إلى فرد؟",
-        label="سؤالك", rows=3, full_width=True, max_length=1000,
-    ).form(submit_button_label="أجب",
-           validate=lambda value: None if value and value.strip() else "اكتب سؤالًا أولًا.")
+def _(RTL, mo, os):
+    # نموذج واحد: لا يبدأ البحث أو الاتصال بـ Claude إلا عند الضغط على «أجب».
+    def _check(value):
+        if not value["question"].strip():
+            return "اكتب سؤالًا أولًا."
+        if value["engine"] == "claude" and not value["api_key"].strip():
+            return "أدخل مفتاح Anthropic API أو اختر النموذج المحلي."
+        return None
+
+    question_form = mo.md("""
+    {engine}
+
+    {api_key}
+
+    {question}
+    """).batch(
+        engine=mo.ui.radio(
+            options={"نموذج محلي مجاني (أبطأ، بلا مفتاح)": "local",
+                     "نموذج Claude من Anthropic (يتطلب مفتاح API)": "claude"},
+            value="نموذج محلي مجاني (أبطأ، بلا مفتاح)", label="من يكتب الإجابة؟"),
+        api_key=mo.ui.text(kind="password", full_width=True,
+                           value=os.environ.get("ANTHROPIC_API_KEY", ""),
+                           label="مفتاح Anthropic API — لخيار Claude فقط، ويبقى في هذه الجلسة"),
+        question=mo.ui.text_area(placeholder="مثال: ما شروط نقل خدمات العمالة المنزلية من فرد إلى فرد؟",
+                                 label="سؤالك", rows=3, full_width=True, max_length=1000),
+    ).form(submit_button_label="أجب", validate=_check)
     mo.vstack([
         question_form,
+        mo.md("مع Claude يُرسل السؤال والمصادر المختارة إلى Anthropic، والتكلفة على حساب صاحب المفتاح. "
+              "النموذج المحلي يعمل داخل التطبيق وقد تستغرق إجابته نصف دقيقة أو أكثر."),
         mo.md("أمثلة: ما مدة صلاحية الرخصة المهنية للعاملين في الذهب والمجوهرات؟ — "
               "كيف أتابع حالة بلاغ في تطبيق وزارة الموارد البشرية؟ — "
               "ما البيانات المطلوبة لحاسبة مكافأة نهاية الخدمة؟"),
@@ -268,24 +269,28 @@ def _(RTL, mo):
 
 
 @app.cell(hide_code=True)
-def _(RTL, answer_locally, answer_with_claude, api_key, engine, find_sources, mo, question_form):
+def _(RTL, answer_locally, answer_with_claude, find_sources, html, mo, question_form):
     mo.stop(question_form.value is None)
-    _question = question_form.value.strip()
-    if engine.value == "claude" and not api_key.value.strip():
-        mo.stop(True, mo.md("أدخل مفتاح Anthropic API أو اختر النموذج المحلي.").style(RTL))
+    _question = question_form.value["question"].strip()
+    _engine = question_form.value["engine"]
     with mo.status.spinner(title="أبحث في الملف وأكتب الإجابة…"):
         sources = find_sources(_question)
-        if engine.value == "claude":
-            _answer, _error = answer_with_claude(_question, sources, api_key.value.strip())
+        if _engine == "claude":
+            _answer, _error = answer_with_claude(_question, sources, question_form.value["api_key"].strip())
         else:
             _answer, _error = answer_locally(_question, sources), None
     mo.stop(_error is not None, mo.callout(mo.md(_error or ""), kind="danger"))
+
+    def _text(value):
+        # النص يُهرَّب، فلا يُفسَّر ناتج النموذج أو المصدر كـ HTML أو Markdown.
+        return mo.Html(f'<div dir="rtl" style="white-space: pre-wrap; line-height: 1.9">{html.escape(value)}</div>')
+
     mo.vstack([
         mo.md("## الإجابة"),
-        mo.plain_text(_answer),
+        _text(_answer),
+        mo.md(f"<small>كتبها: {'Claude' if _engine == 'claude' else 'النموذج المحلي'}</small>"),
         mo.md("### المصادر التي قرأها النموذج"),
-        mo.accordion({f"المصدر {i} — صفحة {s['page']}": mo.plain_text(s["text"])
-                      for i, s in enumerate(sources, 1)}),
+        mo.accordion({f"المصدر {i} — صفحة {s['page']}": _text(s["text"]) for i, s in enumerate(sources, 1)}),
     ]).style(RTL)
     return (sources,)
 
