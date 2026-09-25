@@ -217,8 +217,12 @@ def _(CLAUDE_MODEL, SYSTEM_PROMPT, anthropic, user_message):
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
-        except anthropic.AuthenticationError:
-            return None, "مفتاح API غير صالح."
+        except anthropic.AuthenticationError as error:
+            # نعرض بداية المفتاح ونهايته وطوله فقط، لمقارنته بالمفتاح في Anthropic Console.
+            hint = f"`{key[:10]}…{key[-4:]}`، طوله {len(key)} حرفًا" if len(key) > 14 else f"طوله {len(key)} حرفًا"
+            message = (error.body or {}).get("error", {}).get("message", "") if isinstance(error.body, dict) else ""
+            return None, (f"رفضت Anthropic المفتاح (401{': ' + message if message else ''}). "
+                          f"المفتاح المرسل: {hint}. تأكد أنه المفتاح نفسه في Console وأنه غير ملغى.")
         except anthropic.PermissionDeniedError:
             return None, "المفتاح لا يملك صلاحية استخدام هذا النموذج."
         except anthropic.RateLimitError:
@@ -240,7 +244,7 @@ def _(RTL, mo, os):
     def _check(value):
         if not value["question"].strip():
             return "اكتب سؤالًا أولًا."
-        if value["engine"] == "claude" and not value["api_key"].strip():
+        if value["engine"] == "claude" and not value["api_key"].strip() and not os.environ.get("ANTHROPIC_API_KEY"):
             return "أدخل مفتاح Anthropic API أو اختر النموذج المحلي."
         return None
 
@@ -255,8 +259,8 @@ def _(RTL, mo, os):
             options={"نموذج محلي مجاني، أبطأ وبلا مفتاح": "local",
                      "نموذج Claude من Anthropic، يتطلب مفتاح API": "claude"},
             value="نموذج محلي مجاني، أبطأ وبلا مفتاح", label="من يكتب الإجابة؟"),
+        # لا نضع مفتاح الخادم في الحقل: قيمة الحقل تُرسل إلى متصفح كل زائر.
         api_key=mo.ui.text(kind="password", full_width=True,
-                           value=os.environ.get("ANTHROPIC_API_KEY", ""),
                            label="مفتاح Anthropic API — لخيار Claude فقط، ويبقى في هذه الجلسة"),
         question=mo.ui.text_area(placeholder="مثال: ما شروط نقل خدمات العمالة المنزلية من فرد إلى فرد؟",
                                  label="سؤالك", rows=3, full_width=True, max_length=1000),
@@ -273,12 +277,13 @@ def _(RTL, mo, os):
 
 
 @app.cell(hide_code=True)
-def _(CLAUDE_TOP_K, LOCAL_TOP_K, RTL, answer_locally, answer_with_claude, find_sources, html, mo,
-      question_form):
+def _(CLAUDE_TOP_K, LOCAL_TOP_K, RTL, answer_locally, answer_with_claude, find_sources, html, mo, os,
+      question_form, re):
     mo.stop(question_form.value is None)
     _question = question_form.value["question"].strip()
     _engine = question_form.value["engine"]
-    _key = question_form.value["api_key"].strip()
+    # نحذف المسافات والرموز غير المرئية (مثل علامات الاتجاه) التي قد تُلصق مع المفتاح في صفحة عربية.
+    _key = re.sub(r"[^\x21-\x7e]", "", question_form.value["api_key"]) or os.environ.get("ANTHROPIC_API_KEY", "").strip()
     # نتحقق هنا أيضًا، ولا نعتمد على تحقق النموذج وحده.
     mo.stop(not _question, mo.callout(mo.md("اكتب سؤالًا أولًا."), kind="warn").style(RTL))
     mo.stop(_engine == "claude" and not _key,
