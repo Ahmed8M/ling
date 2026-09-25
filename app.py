@@ -202,6 +202,8 @@ def _(MAX_NEW_TOKENS, SYSTEM_PROMPT, load_local_model, torch, user_message):
 @app.cell(hide_code=True)
 def _(CLAUDE_MODEL, SYSTEM_PROMPT, anthropic, user_message):
     def answer_with_claude(question, sources, key):
+        if not key:
+            return None, "أدخل مفتاح Anthropic API أو اختر النموذج المحلي."
         client = anthropic.Anthropic(api_key=key)
         try:
             response = client.beta.messages.create(
@@ -273,13 +275,18 @@ def _(RTL, answer_locally, answer_with_claude, find_sources, html, mo, question_
     mo.stop(question_form.value is None)
     _question = question_form.value["question"].strip()
     _engine = question_form.value["engine"]
+    _key = question_form.value["api_key"].strip()
+    # نتحقق هنا أيضًا، ولا نعتمد على تحقق النموذج وحده.
+    mo.stop(not _question, mo.callout(mo.md("اكتب سؤالًا أولًا."), kind="warn").style(RTL))
+    mo.stop(_engine == "claude" and not _key,
+            mo.callout(mo.md("أدخل مفتاح Anthropic API أو اختر النموذج المحلي."), kind="warn").style(RTL))
     with mo.status.spinner(title="أبحث في الملف وأكتب الإجابة…"):
         sources = find_sources(_question)
         if _engine == "claude":
-            _answer, _error = answer_with_claude(_question, sources, question_form.value["api_key"].strip())
+            _answer, _error = answer_with_claude(_question, sources, _key)
         else:
             _answer, _error = answer_locally(_question, sources), None
-    mo.stop(_error is not None, mo.callout(mo.md(_error or ""), kind="danger"))
+    mo.stop(_error is not None, mo.callout(mo.md(_error or ""), kind="danger").style(RTL))
 
     def _text(value):
         # النص يُهرَّب، فلا يُفسَّر ناتج النموذج أو المصدر كـ HTML أو Markdown.
