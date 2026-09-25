@@ -53,7 +53,8 @@ def _(Path, tempfile, torch, urllib):
     RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     LOCAL_ANSWER_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
     CLAUDE_MODEL = "claude-opus-5"
-    RERANK_POOL, CANDIDATE_K = 20, 5  # نعرض أفضل خمسة مصادر بعد إعادة الترتيب.
+    RERANK_POOL, CANDIDATE_K = 20, 5  # نعرض أفضل خمسة مصادر.
+    RERANK_KEEP = 3  # أول ثلاثة من Cross-Encoder، ثم نكمل الخمسة بترتيب E5 (TESTING.md).
     # كم مصدرًا يقرأ كل نموذج: مع خمسة مصادر اخترع Qwen 1.5B معلومة في سؤال وأصبح أبطأ (TESTING.md).
     LOCAL_TOP_K, CLAUDE_TOP_K = 2, 5
     MAX_NEW_TOKENS = 256
@@ -69,7 +70,7 @@ def _(Path, tempfile, torch, urllib):
             urllib.request.urlretrieve(
                 "https://raw.githubusercontent.com/Ahmed8M/ling/HEAD/data/labor_2026.md", DATA_PATH)
     RTL = {"direction": "rtl", "text-align": "right"}
-    return (CANDIDATE_K, CLAUDE_MODEL, CLAUDE_TOP_K, DATA_PATH, DEVICE, EMBEDDING_MODEL, LOCAL_ANSWER_MODEL,
+    return (CANDIDATE_K, CLAUDE_MODEL, RERANK_KEEP, CLAUDE_TOP_K, DATA_PATH, DEVICE, EMBEDDING_MODEL, LOCAL_ANSWER_MODEL,
             LOCAL_TOP_K, MAX_NEW_TOKENS, RERANKER_MODEL, RERANK_POOL, RTL)
 
 
@@ -139,9 +140,10 @@ def _(CrossEncoder, DEVICE, EMBEDDING_MODEL, RERANKER_MODEL, RTL, SentenceTransf
 
 
 @app.cell(hide_code=True)
-def _(CANDIDATE_K, RERANK_POOL, blocks, chunks, encoder, index, np, reranker):
+def _(CANDIDATE_K, RERANK_KEEP, RERANK_POOL, blocks, chunks, encoder, index, np, reranker):
     def find_sources(question):
-        """يسترجع E5 عشرين مصدرًا، ويعيد Cross-Encoder ترتيبها، ونعيد أفضل CANDIDATE_K."""
+        """يسترجع E5 عشرين مصدرًا، ويعيد Cross-Encoder ترتيبها. نأخذ أول RERANK_KEEP منها، ونكمل من ترتيب E5
+        حتى لا يُخرج Cross-Encoder وحده مصدرًا وضعه E5 في المقدمة."""
         query = encoder.encode(["query: " + question], normalize_embeddings=True)
         _, ids = index.search(np.asarray(query, dtype="float32"), index.ntotal)
         pool, seen = [], set()
@@ -156,7 +158,9 @@ def _(CANDIDATE_K, RERANK_POOL, blocks, chunks, encoder, index, np, reranker):
                 break
         scores = reranker.predict([[question, hit["match_text"]] for hit in pool], show_progress_bar=False)
         ranked = [hit for _, hit in sorted(zip(scores, pool), key=lambda pair: -pair[0])]
-        return ranked[:CANDIDATE_K]
+        kept = ranked[:RERANK_KEEP]
+        chosen = {hit["block"] for hit in kept}
+        return (kept + [hit for hit in pool if hit["block"] not in chosen])[:CANDIDATE_K]
 
     SYSTEM_PROMPT = (
         "أنت مساعد يجيب بالعربية عن ملف قطاع العمل. أجب باختصار اعتمادًا فقط على المصادر المرفقة. "
