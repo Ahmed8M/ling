@@ -248,9 +248,9 @@ def _(RTL, mo, os):
     {question}
     """).batch(
         engine=mo.ui.radio(
-            options={"نموذج محلي مجاني (أبطأ، بلا مفتاح)": "local",
-                     "نموذج Claude من Anthropic (يتطلب مفتاح API)": "claude"},
-            value="نموذج محلي مجاني (أبطأ، بلا مفتاح)", label="من يكتب الإجابة؟"),
+            options={"نموذج محلي مجاني، أبطأ وبلا مفتاح": "local",
+                     "نموذج Claude من Anthropic، يتطلب مفتاح API": "claude"},
+            value="نموذج محلي مجاني، أبطأ وبلا مفتاح", label="من يكتب الإجابة؟"),
         api_key=mo.ui.text(kind="password", full_width=True,
                            value=os.environ.get("ANTHROPIC_API_KEY", ""),
                            label="مفتاح Anthropic API — لخيار Claude فقط، ويبقى في هذه الجلسة"),
