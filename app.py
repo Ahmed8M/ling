@@ -53,7 +53,9 @@ def _(Path, tempfile, torch, urllib):
     RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     LOCAL_ANSWER_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
     CLAUDE_MODEL = "claude-opus-5"
-    RERANK_POOL, CANDIDATE_K, TOP_K = 20, 5, 2
+    RERANK_POOL, CANDIDATE_K = 20, 5  # نعرض أفضل خمسة مصادر بعد إعادة الترتيب.
+    # كم مصدرًا يقرأ كل نموذج: مع خمسة مصادر اخترع Qwen 1.5B معلومة في سؤال وأصبح أبطأ (TESTING.md).
+    LOCAL_TOP_K, CLAUDE_TOP_K = 2, 5
     MAX_NEW_TOKENS = 256
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     torch.set_num_threads(min(4, torch.get_num_threads()))
@@ -67,8 +69,8 @@ def _(Path, tempfile, torch, urllib):
             urllib.request.urlretrieve(
                 "https://raw.githubusercontent.com/Ahmed8M/ling/HEAD/data/labor_2026.md", DATA_PATH)
     RTL = {"direction": "rtl", "text-align": "right"}
-    return (CANDIDATE_K, CLAUDE_MODEL, DATA_PATH, DEVICE, EMBEDDING_MODEL, LOCAL_ANSWER_MODEL,
-            MAX_NEW_TOKENS, RERANKER_MODEL, RERANK_POOL, RTL, TOP_K)
+    return (CANDIDATE_K, CLAUDE_MODEL, CLAUDE_TOP_K, DATA_PATH, DEVICE, EMBEDDING_MODEL, LOCAL_ANSWER_MODEL,
+            LOCAL_TOP_K, MAX_NEW_TOKENS, RERANKER_MODEL, RERANK_POOL, RTL)
 
 
 @app.cell(hide_code=True)
@@ -137,9 +139,9 @@ def _(CrossEncoder, DEVICE, EMBEDDING_MODEL, RERANKER_MODEL, RTL, SentenceTransf
 
 
 @app.cell(hide_code=True)
-def _(CANDIDATE_K, RERANK_POOL, TOP_K, blocks, chunks, encoder, index, np, reranker):
+def _(CANDIDATE_K, RERANK_POOL, blocks, chunks, encoder, index, np, reranker):
     def find_sources(question):
-        """يسترجع E5 عشرين مصدرًا، ويعيد Cross-Encoder ترتيبها، ونعيد أفضل TOP_K."""
+        """يسترجع E5 عشرين مصدرًا، ويعيد Cross-Encoder ترتيبها، ونعيد أفضل CANDIDATE_K."""
         query = encoder.encode(["query: " + question], normalize_embeddings=True)
         _, ids = index.search(np.asarray(query, dtype="float32"), index.ntotal)
         pool, seen = [], set()
@@ -154,7 +156,7 @@ def _(CANDIDATE_K, RERANK_POOL, TOP_K, blocks, chunks, encoder, index, np, reran
                 break
         scores = reranker.predict([[question, hit["match_text"]] for hit in pool], show_progress_bar=False)
         ranked = [hit for _, hit in sorted(zip(scores, pool), key=lambda pair: -pair[0])]
-        return ranked[:CANDIDATE_K][:TOP_K]
+        return ranked[:CANDIDATE_K]
 
     SYSTEM_PROMPT = (
         "أنت مساعد يجيب بالعربية عن ملف قطاع العمل. أجب باختصار اعتمادًا فقط على المصادر المرفقة. "
@@ -271,7 +273,8 @@ def _(RTL, mo, os):
 
 
 @app.cell(hide_code=True)
-def _(RTL, answer_locally, answer_with_claude, find_sources, html, mo, question_form):
+def _(CLAUDE_TOP_K, LOCAL_TOP_K, RTL, answer_locally, answer_with_claude, find_sources, html, mo,
+      question_form):
     mo.stop(question_form.value is None)
     _question = question_form.value["question"].strip()
     _engine = question_form.value["engine"]
@@ -282,10 +285,11 @@ def _(RTL, answer_locally, answer_with_claude, find_sources, html, mo, question_
             mo.callout(mo.md("أدخل مفتاح Anthropic API أو اختر النموذج المحلي."), kind="warn").style(RTL))
     with mo.status.spinner(title="أبحث في الملف وأكتب الإجابة…"):
         sources = find_sources(_question)
+        _read = CLAUDE_TOP_K if _engine == "claude" else LOCAL_TOP_K
         if _engine == "claude":
-            _answer, _error = answer_with_claude(_question, sources, _key)
+            _answer, _error = answer_with_claude(_question, sources[:_read], _key)
         else:
-            _answer, _error = answer_locally(_question, sources), None
+            _answer, _error = answer_locally(_question, sources[:_read]), None
     mo.stop(_error is not None, mo.callout(mo.md(_error or ""), kind="danger").style(RTL))
 
     def _text(value):
@@ -296,8 +300,11 @@ def _(RTL, answer_locally, answer_with_claude, find_sources, html, mo, question_
         mo.md("## الإجابة"),
         _text(_answer),
         mo.md(f"<small>كتبها: {'Claude' if _engine == 'claude' else 'النموذج المحلي'}</small>"),
-        mo.md("### المصادر التي قرأها النموذج"),
-        mo.accordion({f"المصدر {i} — صفحة {s['page']}": _text(s["text"]) for i, s in enumerate(sources, 1)}),
+        mo.md(f"### أقرب {len(sources)} مصادر في الملف"),
+        mo.md(f"<small>قرأ النموذج أول {min(_read, len(sources))} منها؛ الباقي للاطلاع فقط.</small>"
+              if _read < len(sources) else "<small>قرأ النموذج جميع هذه المصادر.</small>"),
+        mo.accordion({f"المصدر {i} — صفحة {s['page']}" + ("" if i <= _read else " — لم يقرأه النموذج"): _text(s["text"])
+                      for i, s in enumerate(sources, 1)}),
     ]).style(RTL)
     return (sources,)
 
